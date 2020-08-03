@@ -575,7 +575,7 @@ def test_post_data(django_elasticapm_client):
     assert "request" in event["context"]
     request = event["context"]["request"]
     assert request["method"] == "POST"
-    if django_elasticapm_client.config.capture_body in ("errors", "all"):
+    if django_elasticapm_client.config.capture_body in (constants.ERROR, "all"):
         assert request["body"] == {"x": "1", "y": ["2", "3"]}
     else:
         assert request["body"] == "[REDACTED]"
@@ -607,12 +607,13 @@ def test_post_raw_data(django_elasticapm_client):
     assert "request" in event["context"]
     request = event["context"]["request"]
     assert request["method"] == "POST"
-    if django_elasticapm_client.config.capture_body in ("errors", "all"):
+    if django_elasticapm_client.config.capture_body in (constants.ERROR, "all"):
         assert request["body"] == compat.b("foobar")
     else:
         assert request["body"] == "[REDACTED]"
 
 
+@pytest.mark.parametrize("django_elasticapm_client", [{"capture_body": "errors"}], indirect=True)
 def test_post_read_error_logging(django_elasticapm_client, caplog, rf):
     request = rf.post("/test", data="{}", content_type="application/json")
 
@@ -621,7 +622,7 @@ def test_post_read_error_logging(django_elasticapm_client, caplog, rf):
 
     request.read = read
     with caplog.at_level(logging.DEBUG):
-        django_elasticapm_client.get_data_from_request(request, capture_body=True)
+        django_elasticapm_client.get_data_from_request(request, constants.ERROR)
     record = caplog.records[0]
     assert record.message == "Can't capture request body: foobar"
 
@@ -692,7 +693,7 @@ def test_request_capture(django_elasticapm_client):
     assert "request" in event["context"]
     request = event["context"]["request"]
     assert request["method"] == "POST"
-    if django_elasticapm_client.config.capture_body in ("errors", "all"):
+    if django_elasticapm_client.config.capture_body in (constants.ERROR, "all"):
         assert request["body"] == "<unavailable>"
     else:
         assert request["body"] == "[REDACTED]"
@@ -1290,6 +1291,20 @@ def test_test_exception(urlopen_mock):
     assert "Success! We tracked the error successfully!" in output
 
 
+@pytest.mark.parametrize(
+    "django_elasticapm_client", [{"transport_class": "elasticapm.transport.http.Transport"}], indirect=True
+)
+def test_test_exception_fails(django_elasticapm_client):
+    stdout = compat.StringIO()
+    with override_settings(
+        ELASTIC_APM={"TRANSPORT_CLASS": "elasticapm.transport.http.Transport"},
+        **middleware_setting(django.VERSION, ["foo", "elasticapm.contrib.django.middleware.TracingMiddleware"])
+    ):
+        call_command("elasticapm", "test", stdout=stdout, stderr=stdout)
+    output = stdout.getvalue()
+    assert "Oops" in output
+
+
 def test_tracing_middleware_uses_test_client(client, django_elasticapm_client):
     with override_settings(
         **middleware_setting(django.VERSION, ["elasticapm.contrib.django.middleware.TracingMiddleware"])
@@ -1309,7 +1324,7 @@ def test_capture_post_errors_dict(client, django_elasticapm_client):
     with pytest.raises(MyException):
         client.post(reverse("elasticapm-raise-exc"), {"username": "john", "password": "smith"})
     error = django_elasticapm_client.events[ERROR][0]
-    if django_elasticapm_client.config.capture_body in ("errors", "all"):
+    if django_elasticapm_client.config.capture_body in (constants.ERROR, "all"):
         assert error["context"]["request"]["body"] == {"username": "john", "password": "smith"}
     else:
         assert error["context"]["request"]["body"] == "[REDACTED]"
@@ -1347,6 +1362,38 @@ def test_capture_body_config_is_dynamic_for_transactions(client, django_elastica
     assert transaction["context"]["request"]["body"] == "[REDACTED]"
 
 
+def test_capture_headers_config_is_dynamic_for_errors(client, django_elasticapm_client):
+    django_elasticapm_client.config.update(version="1", capture_headers=True)
+    with pytest.raises(MyException):
+        client.post(reverse("elasticapm-raise-exc"))
+    error = django_elasticapm_client.events[ERROR][0]
+    assert error["context"]["request"]["headers"]
+
+    django_elasticapm_client.config.update(version="1", capture_headers=False)
+    with pytest.raises(MyException):
+        client.post(reverse("elasticapm-raise-exc"))
+    error = django_elasticapm_client.events[ERROR][1]
+    assert "headers" not in error["context"]["request"]
+
+
+def test_capture_headers_config_is_dynamic_for_transactions(client, django_elasticapm_client):
+    django_elasticapm_client.config.update(version="1", capture_headers=True)
+    with override_settings(
+        **middleware_setting(django.VERSION, ["elasticapm.contrib.django.middleware.TracingMiddleware"])
+    ):
+        client.post(reverse("elasticapm-no-error"))
+    transaction = django_elasticapm_client.events[TRANSACTION][0]
+    assert transaction["context"]["request"]["headers"]
+
+    django_elasticapm_client.config.update(version="1", capture_headers=False)
+    with override_settings(
+        **middleware_setting(django.VERSION, ["elasticapm.contrib.django.middleware.TracingMiddleware"])
+    ):
+        client.post(reverse("elasticapm-no-error"))
+    transaction = django_elasticapm_client.events[TRANSACTION][1]
+    assert "headers" not in transaction["context"]["request"]
+
+
 @pytest.mark.parametrize(
     "django_elasticapm_client",
     [{"capture_body": "errors"}, {"capture_body": "transactions"}, {"capture_body": "all"}, {"capture_body": "off"}],
@@ -1360,7 +1407,7 @@ def test_capture_post_errors_multivalue_dict(client, django_elasticapm_client):
             content_type="application/x-www-form-urlencoded",
         )
     error = django_elasticapm_client.events[ERROR][0]
-    if django_elasticapm_client.config.capture_body in ("errors", "all"):
+    if django_elasticapm_client.config.capture_body in (constants.ERROR, "all"):
         assert error["context"]["request"]["body"] == {"key": ["value1", "value2", "value3"], "test": "test"}
     else:
         assert error["context"]["request"]["body"] == "[REDACTED]"
@@ -1379,7 +1426,7 @@ def test_capture_post_errors_raw(client, django_sending_elasticapm_client):
         )
     django_sending_elasticapm_client.close()
     error = django_sending_elasticapm_client.httpserver.payloads[0][1]["error"]
-    if django_sending_elasticapm_client.config.capture_body in ("errors", "all"):
+    if django_sending_elasticapm_client.config.capture_body in (constants.ERROR, "all"):
         assert error["context"]["request"]["body"] == '{"a": "b"}'
     else:
         assert error["context"]["request"]["body"] == "[REDACTED]"
@@ -1394,8 +1441,10 @@ def test_capture_empty_body(client, django_elasticapm_client):
     with pytest.raises(MyException):
         client.post(reverse("elasticapm-raise-exc"), data={})
     error = django_elasticapm_client.events[ERROR][0]
-    # body should be empty no matter if we capture it or not
-    assert error["context"]["request"]["body"] == {}
+    if django_elasticapm_client.config.capture_body not in ("error", "all"):
+        assert error["context"]["request"]["body"] == "[REDACTED]"
+    else:
+        assert error["context"]["request"]["body"] == {}
 
 
 @pytest.mark.parametrize(
@@ -1409,7 +1458,7 @@ def test_capture_files(client, django_elasticapm_client):
             reverse("elasticapm-raise-exc"), data={"a": "b", "f1": compat.BytesIO(100 * compat.b("1")), "f2": f}
         )
     error = django_elasticapm_client.events[ERROR][0]
-    if django_elasticapm_client.config.capture_body in ("errors", "all"):
+    if django_elasticapm_client.config.capture_body in (constants.ERROR, "all"):
         assert error["context"]["request"]["body"] == {"a": "b", "_files": {"f1": "f1", "f2": "django_tests.py"}}
     else:
         assert error["context"]["request"]["body"] == "[REDACTED]"

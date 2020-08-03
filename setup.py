@@ -125,6 +125,7 @@ tests_require = [
     "isort",
     "pytest-cache",
     "pytest-isort",
+    "graphene"
 ]
 
 if sys.version_info[0] == 2:
@@ -181,7 +182,7 @@ setup_kwargs = dict(
         "flask": ["blinker"],
         "aiohttp": ["aiohttp"],
         "tornado": ["tornado"],
-        "starlette": ["starlette", "flask", "requests"],
+        "starlette": ["starlette"],
         "opentracing": ["opentracing>=2.0.0"],
     },
     python_requires=">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, <4",

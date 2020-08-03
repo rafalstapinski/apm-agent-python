@@ -45,6 +45,7 @@ _cls_register = {
     "elasticapm.instrumentation.packages.pymongo.PyMongoBulkInstrumentation",
     "elasticapm.instrumentation.packages.pymongo.PyMongoCursorInstrumentation",
     "elasticapm.instrumentation.packages.python_memcached.PythonMemcachedInstrumentation",
+    "elasticapm.instrumentation.packages.pymemcache.PyMemcacheInstrumentation",
     "elasticapm.instrumentation.packages.redis.RedisInstrumentation",
     "elasticapm.instrumentation.packages.redis.RedisPipelineInstrumentation",
     "elasticapm.instrumentation.packages.redis.RedisConnectionInstrumentation",
@@ -59,15 +60,18 @@ _cls_register = {
     "elasticapm.instrumentation.packages.django.template.DjangoTemplateInstrumentation",
     "elasticapm.instrumentation.packages.django.template.DjangoTemplateSourceInstrumentation",
     "elasticapm.instrumentation.packages.urllib.UrllibInstrumentation",
+    "elasticapm.instrumentation.packages.graphql.GraphQLExecutorInstrumentation",
+    "elasticapm.instrumentation.packages.graphql.GraphQLBackendInstrumentation",
 }
 
-if sys.version_info >= (3, 5):
+if sys.version_info >= (3, 7):
     _cls_register.update(
         [
             "elasticapm.instrumentation.packages.asyncio.sleep.AsyncIOSleepInstrumentation",
             "elasticapm.instrumentation.packages.asyncio.aiohttp_client.AioHttpClientInstrumentation",
             "elasticapm.instrumentation.packages.asyncio.elasticsearch.ElasticSearchAsyncConnection",
             "elasticapm.instrumentation.packages.asyncio.aioelasticsearch.AioElasticSearchAsyncConnection",
+            "elasticapm.instrumentation.packages.asyncio.elasticsearch.AsyncElasticsearchInstrumentation",
             "elasticapm.instrumentation.packages.asyncio.aiopg.AioPGInstrumentation",
             "elasticapm.instrumentation.packages.asyncio.asyncpg.AsyncPGInstrumentation",
             "elasticapm.instrumentation.packages.tornado.TornadoRequestExecuteInstrumentation",

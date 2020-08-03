@@ -38,7 +38,7 @@ import certifi
 import urllib3
 from urllib3.exceptions import MaxRetryError, TimeoutError
 
-from elasticapm.transport.base import TransportException
+from elasticapm.transport.exceptions import TransportException
 from elasticapm.transport.http_base import HTTPTransportBase
 from elasticapm.utils import compat, json_encoder, read_pem_file
 from elasticapm.utils.logging import get_logger
@@ -126,6 +126,8 @@ class Transport(HTTPTransportBase):
         url = self._config_url
         data = json_encoder.dumps(keys).encode("utf-8")
         headers = self._headers.copy()
+        headers[b"Content-Type"] = "application/json"
+        headers.pop(b"Content-Encoding", None)  # remove gzip content-encoding header
         headers.update(self.auth_headers)
         max_age = 300
         if current_version:

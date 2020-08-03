@@ -35,6 +35,7 @@ import re
 import socket
 import threading
 
+from elasticapm.conf.constants import BASE_SANITIZE_FIELD_NAMES
 from elasticapm.utils import compat, starmatch_to_regex
 from elasticapm.utils.logging import get_logger
 from elasticapm.utils.threading import IntervalTimer, ThreadManager
@@ -252,6 +253,7 @@ class _ConfigBase(object):
 
 class Config(_ConfigBase):
     service_name = _ConfigValue("SERVICE_NAME", validators=[RegexValidator("^[a-zA-Z0-9 _-]+$")], required=True)
+    service_node_name = _ConfigValue("SERVICE_NODE_NAME", default=None)
     environment = _ConfigValue("ENVIRONMENT", default=None)
     secret_token = _ConfigValue("SECRET_TOKEN")
     api_key = _ConfigValue("API_KEY")
@@ -285,6 +287,7 @@ class Config(_ConfigBase):
             "elasticapm.processors.sanitize_http_request_body",
         ],
     )
+    sanitize_field_names = _ListConfigValue("SANITIZE_FIELD_NAMES", default=BASE_SANITIZE_FIELD_NAMES)
     metrics_sets = _ListConfigValue(
         "METRICS_SETS",
         default=[
@@ -301,7 +304,7 @@ class Config(_ConfigBase):
     breakdown_metrics = _BoolConfigValue("BREAKDOWN_METRICS", default=True)
     disable_metrics = _ListConfigValue("DISABLE_METRICS", type=starmatch_to_regex, default=[])
     central_config = _BoolConfigValue("CENTRAL_CONFIG", default=True)
-    api_request_size = _ConfigValue("API_REQUEST_SIZE", type=int, validators=[size_validator], default=750 * 1024)
+    api_request_size = _ConfigValue("API_REQUEST_SIZE", type=int, validators=[size_validator], default=768 * 1024)
     api_request_time = _ConfigValue("API_REQUEST_TIME", type=int, validators=[duration_validator], default=10 * 1000)
     transaction_sample_rate = _ConfigValue("TRANSACTION_SAMPLE_RATE", type=float, default=1.0)
     transaction_max_spans = _ConfigValue("TRANSACTION_MAX_SPANS", type=int, default=500)
@@ -322,7 +325,11 @@ class Config(_ConfigBase):
     local_var_max_length = _ConfigValue("LOCAL_VAR_MAX_LENGTH", type=int, default=200)
     local_var_list_max_length = _ConfigValue("LOCAL_VAR_LIST_MAX_LENGTH", type=int, default=10)
     local_var_dict_max_length = _ConfigValue("LOCAL_VAR_DICT_MAX_LENGTH", type=int, default=10)
-    capture_body = _ConfigValue("CAPTURE_BODY", default="off")
+    capture_body = _ConfigValue(
+        "CAPTURE_BODY",
+        default="off",
+        validators=[lambda val, _: {"errors": "error", "transactions": "transaction"}.get(val, val)],
+    )
     async_mode = _BoolConfigValue("ASYNC_MODE", default=True)
     instrument_django_middleware = _BoolConfigValue("INSTRUMENT_DJANGO_MIDDLEWARE", default=True)
     autoinsert_django_middleware = _BoolConfigValue("AUTOINSERT_DJANGO_MIDDLEWARE", default=True)
@@ -332,12 +339,22 @@ class Config(_ConfigBase):
     framework_version = _ConfigValue("FRAMEWORK_VERSION", default=None)
     global_labels = _DictConfigValue("GLOBAL_LABELS", default=None)
     disable_send = _BoolConfigValue("DISABLE_SEND", default=False)
+    enabled = _BoolConfigValue("ENABLED", default=True)
+    recording = _BoolConfigValue("RECORDING", default=True)
     instrument = _BoolConfigValue("INSTRUMENT", default=True)
     enable_distributed_tracing = _BoolConfigValue("ENABLE_DISTRIBUTED_TRACING", default=True)
     capture_headers = _BoolConfigValue("CAPTURE_HEADERS", default=True)
     django_transaction_name_from_route = _BoolConfigValue("DJANGO_TRANSACTION_NAME_FROM_ROUTE", default=False)
     disable_log_record_factory = _BoolConfigValue("DISABLE_LOG_RECORD_FACTORY", default=False)
     use_elastic_traceparent_header = _BoolConfigValue("USE_ELASTIC_TRACEPARENT_HEADER", default=True)
+    cloud_provider = _ConfigValue("CLOUD_PROVIDER", default=True)
+
+    @property
+    def is_recording(self):
+        if not self.enabled:
+            return False
+        else:
+            return self.recording
 
 
 class VersionedConfig(ThreadManager):
@@ -345,7 +362,16 @@ class VersionedConfig(ThreadManager):
     A thin layer around Config that provides versioning
     """
 
-    __slots__ = ("_config", "_version", "_first_config", "_first_version", "_lock", "transport", "_update_thread")
+    __slots__ = (
+        "_config",
+        "_version",
+        "_first_config",
+        "_first_version",
+        "_lock",
+        "transport",
+        "_update_thread",
+        "pid",
+    )
 
     def __init__(self, config_object, version, transport=None):
         """
@@ -358,6 +384,7 @@ class VersionedConfig(ThreadManager):
         self.transport = transport
         self._lock = threading.Lock()
         self._update_thread = None
+        super(VersionedConfig, self).__init__()
 
     def update(self, version, **config):
         """
@@ -431,11 +458,12 @@ class VersionedConfig(ThreadManager):
 
         return next_run
 
-    def start_thread(self):
+    def start_thread(self, pid=None):
         self._update_thread = IntervalTimer(
             self.update_config, 1, "eapm conf updater", daemon=True, evaluate_function_interval=True
         )
         self._update_thread.start()
+        super(VersionedConfig, self).start_thread(pid=pid)
 
     def stop_thread(self):
         if self._update_thread:

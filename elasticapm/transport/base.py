@@ -45,13 +45,6 @@ from elasticapm.utils.threading import ThreadManager
 logger = get_logger("elasticapm.transport")
 
 
-class TransportException(Exception):
-    def __init__(self, message, data=None, print_trace=True):
-        super(TransportException, self).__init__(message)
-        self.data = data
-        self.print_trace = print_trace
-
-
 class Transport(ThreadManager):
     """
     All transport implementations need to subclass this class
@@ -64,11 +57,8 @@ class Transport(ThreadManager):
     def __init__(
         self,
         client,
-        metadata=None,
         compress_level=5,
         json_serializer=json_encoder.dumps,
-        max_flush_time=None,
-        max_buffer_size=None,
         queue_chill_count=500,
         queue_chill_time=1.0,
         processors=None,
@@ -77,20 +67,15 @@ class Transport(ThreadManager):
         """
         Create a new Transport instance
 
-        :param metadata: Metadata object to prepend to every queue
         :param compress_level: GZip compress level. If zero, no GZip compression will be used
         :param json_serializer: serializer to use for JSON encoding
-        :param max_flush_time: Maximum time between flushes in seconds
-        :param max_buffer_size: Maximum size of buffer before flush
         :param kwargs:
         """
         self.client = client
         self.state = TransportState()
-        self._metadata = metadata if metadata is not None else {}
+        self._metadata = None
         self._compress_level = min(9, max(0, compress_level if compress_level is not None else 0))
         self._json_serializer = json_serializer
-        self._max_flush_time = max_flush_time
-        self._max_buffer_size = max_buffer_size
         self._queued_data = None
         self._event_queue = self._init_event_queue(chill_until=queue_chill_count, max_chill_time=queue_chill_time)
         self._is_chilled_queue = isinstance(self._event_queue, ChilledQueue)
@@ -100,6 +85,15 @@ class Transport(ThreadManager):
         self._flushed = threading.Event()
         self._closed = False
         self._processors = processors if processors is not None else []
+        super(Transport, self).__init__()
+
+    @property
+    def _max_flush_time(self):
+        return self.client.config.api_request_time / 1000.0 if self.client else None
+
+    @property
+    def _max_buffer_size(self):
+        return self.client.config.api_request_size if self.client else None
 
     def queue(self, event_type, data, flush=False):
         try:
@@ -111,6 +105,10 @@ class Transport(ThreadManager):
             logger.debug("Event of type %s dropped due to full event queue", event_type)
 
     def _process_queue(self):
+        # Rebuild the metadata to capture new process information
+        if self.client:
+            self._metadata = self.client.build_metadata()
+
         buffer = self._init_buffer()
         buffer_written = False
         # add some randomness to timeout to avoid stampedes of several workers that are booted at the same time
@@ -129,7 +127,13 @@ class Transport(ThreadManager):
 
             if event_type == "close":
                 if buffer_written:
-                    self._flush(buffer)
+                    try:
+                        self._flush(buffer)
+                    except Exception as exc:
+                        logger.error(
+                            "Exception occurred while flushing the buffer "
+                            "before closing the transport connection: {0}".format(exc)
+                        )
                 self._flushed.set()
                 return  # time to go home!
 
@@ -172,7 +176,7 @@ class Transport(ThreadManager):
         # Run the data through processors
         for processor in self._processors:
             if not hasattr(processor, "event_types") or event_type in processor.event_types:
-                data = processor(self, data)
+                data = processor(self.client, data)
                 if not data:
                     logger.debug(
                         "Dropped event of type %s due to processor %s.%s",
@@ -226,13 +230,13 @@ class Transport(ThreadManager):
             except Exception as e:
                 self.handle_transport_fail(e)
 
-    def start_thread(self):
-        current_pid = os.getpid()
-        if (not self._thread or current_pid != self._thread.pid) and not self._closed:
+    def start_thread(self, pid=None):
+        super(Transport, self).start_thread(pid=pid)
+        if (not self._thread or self.pid != self._thread.pid) and not self._closed:
             try:
                 self._thread = threading.Thread(target=self._process_queue, name="eapm event processor thread")
                 self._thread.daemon = True
-                self._thread.pid = current_pid
+                self._thread.pid = self.pid
                 self._thread.start()
             except RuntimeError:
                 pass
@@ -254,7 +258,7 @@ class Transport(ThreadManager):
         self._closed = True
         self.queue("close", None)
         if not self._flushed.wait(timeout=self._max_flush_time):
-            raise ValueError("close timed out")
+            logger.error("Closing the transport connection timed out.")
 
     stop_thread = close
 

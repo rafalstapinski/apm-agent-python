@@ -30,20 +30,21 @@
 
 import json
 
-from elasticapm.conf import constants
-from elasticapm.utils import compat, get_url_dict
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import Message
 
+from elasticapm.conf import Config, constants
+from elasticapm.utils import compat, get_url_dict
 
-async def get_data_from_request(request: Request, capture_body=False, capture_headers=True) -> dict:
+
+async def get_data_from_request(request: Request, config: Config, event_type: str) -> dict:
     """Loads data from incoming request for APM capturing.
 
     Args:
         request (Request)
-        capture_body (bool): Loads also request body if True
-        capture_headers (bool): Loads also request headers if True
+        config (Config)
+        event_type (str)
 
     Returns:
         dict
@@ -53,34 +54,37 @@ async def get_data_from_request(request: Request, capture_body=False, capture_he
         "socket": {"remote_address": _get_client_ip(request), "encrypted": request.url.is_secure},
         "cookies": request.cookies,
     }
-    if capture_headers:
+    if config.capture_headers:
         result["headers"] = dict(request.headers)
 
     if request.method in constants.HTTP_WITH_BODY:
-        body = None
-        try:
-            body = await get_body(request)
-            if request.headers.get("content-type") == "application/x-www-form-urlencoded":
-                body = await query_params_to_dict(body)
-            else:
-                body = json.loads(body)
-        except Exception:
-            pass
-        if body is not None:
-            result["body"] = body if capture_body else "[REDACTED]"
+        if config.capture_body not in ("all", event_type):
+            result["body"] = "[REDACTED]"
+        else:
+            body = None
+            try:
+                body = await get_body(request)
+                if request.headers.get("content-type") == "application/x-www-form-urlencoded":
+                    body = await query_params_to_dict(body)
+                else:
+                    body = json.loads(body)
+            except Exception:
+                pass
+            if body is not None:
+                result["body"] = body
 
     result["url"] = get_url_dict(str(request.url))
 
     return result
 
 
-async def get_data_from_response(response: Response, capture_body=False, capture_headers=True) -> dict:
+async def get_data_from_response(response: Response, config: Config, event_type: str) -> dict:
     """Loads data from response for APM capturing.
 
     Args:
         response (Response)
-        capture_body (bool): Loads also response body if True
-        capture_headers (bool): Loads also response HTTP headers if True
+        config (Config)
+        event_type (str)
 
     Returns:
         dict
@@ -90,11 +94,11 @@ async def get_data_from_response(response: Response, capture_body=False, capture
     if isinstance(getattr(response, "status_code", None), compat.integer_types):
         result["status_code"] = response.status_code
 
-    if capture_headers and getattr(response, "headers", None):
+    if config.capture_headers and getattr(response, "headers", None):
         headers = response.headers
         result["headers"] = {key: ";".join(headers.getlist(key)) for key in compat.iterkeys(headers)}
 
-    if capture_body:
+    if config.capture_body in ("all", event_type) and hasattr(response, "body"):
         result["body"] = response.body.decode("utf-8")
 
     return result

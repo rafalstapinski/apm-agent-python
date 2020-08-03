@@ -38,7 +38,7 @@ import re
 from elasticapm.instrumentation.packages.base import AbstractInstrumentedModule
 from elasticapm.traces import capture_span
 from elasticapm.utils import compat, wrapt
-from elasticapm.utils.encoding import force_text
+from elasticapm.utils.encoding import force_text, shorten
 
 
 class Literal(object):
@@ -197,6 +197,7 @@ EXEC_ACTION = "exec"
 
 class CursorProxy(wrapt.ObjectProxy):
     provider_name = None
+    DML_QUERIES = ("INSERT", "DELETE", "UPDATE")
 
     def __init__(self, wrapped, destination_info=None):
         super(CursorProxy, self).__init__(wrapped)
@@ -224,6 +225,11 @@ class CursorProxy(wrapt.ObjectProxy):
             signature = sql_string + "()"
         else:
             signature = self.extract_signature(sql_string)
+
+        # Truncate sql_string to 10000 characters to prevent large queries from
+        # causing an error to APM server.
+        sql_string = shorten(sql_string, string_length=10000)
+
         with capture_span(
             signature,
             span_type="db",
@@ -231,11 +237,15 @@ class CursorProxy(wrapt.ObjectProxy):
             span_action=action,
             extra={"db": {"type": "sql", "statement": sql_string}, "destination": self._self_destination_info},
             skip_frames=1,
-        ):
+        ) as span:
             if params is None:
-                return method(sql)
+                result = method(sql)
             else:
-                return method(sql, params)
+                result = method(sql, params)
+            # store "rows affected", but only for DML queries like insert/update/delete
+            if span and self.rowcount not in (-1, None) and signature.startswith(self.DML_QUERIES):
+                span.update_context("db", {"rows_affected": self.rowcount})
+            return result
 
     def extract_signature(self, sql):
         raise NotImplementedError()
